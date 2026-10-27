@@ -34,3 +34,4 @@ choma_db_langchain_smoke.lock
 chroma_db_langchain
 chroma_db
 test_langchain_smoke.py
+.venv-jenkins/

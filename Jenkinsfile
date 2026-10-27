@@ -1,3 +1,4 @@
+
 pipeline {
     agent any
 
@@ -7,7 +8,7 @@ pipeline {
 
     environment {
         PROJECT_DIR = 'C:\\Projects\\document-rag-assistant'
-        PYTHON = 'C:\\Projects\\document-rag-assistant\\.venv\\Scripts\\python.exe'
+        PYTHON = 'C:\\Projects\\document-rag-assistant\\.venv-jenkins\\Scripts\\python.exe'
     }
 
     stages {
@@ -16,7 +17,7 @@ pipeline {
                 dir("${PROJECT_DIR}") {
                     bat '"%PYTHON%" --version'
                     bat '"%PYTHON%" -m pip --version'
-                    bat 'git status --short'
+                    bat 'git -c safe.directory=C:/Projects/document-rag-assistant status --short'
                 }
             }
         }
@@ -24,6 +25,7 @@ pipeline {
         stage('Install Dependencies') {
             steps {
                 dir("${PROJECT_DIR}") {
+                    bat '"%PYTHON%" -m pip install --upgrade pip'
                     bat '"%PYTHON%" -m pip install -r requirements.txt'
                 }
             }
