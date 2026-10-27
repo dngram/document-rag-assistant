@@ -30,3 +30,7 @@ Thumbs.db
 
 # Ignore the smoke test database, which is created and deleted during testing.
 chroma_db_langchain_smoke/
+choma_db_langchain_smoke.lock
+chroma_db_langchain
+chroma_db
+test_langchain_smoke.py
