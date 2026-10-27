@@ -60,6 +60,7 @@ class VectorStore:
                     f"{chunk.source}|{chunk.page_number}|"
                     f"{chunk.chunk_index}|{chunk.text}"
                 )
+
                 chunk_id = hashlib.sha256(
                     identity.encode("utf-8")
                 ).hexdigest()
@@ -86,3 +87,21 @@ class VectorStore:
             stored_count += len(source_chunks)
 
         return stored_count
+
+    def get_all_chunks(self) -> list[dict]:
+        """Return all stored text chunks and their metadata for keyword search."""
+        stored = self.collection.get(
+            include=["documents", "metadatas"],
+        )
+
+        documents = stored.get("documents") or []
+        metadatas = stored.get("metadatas") or []
+
+        return [
+            {
+                "text": text,
+                "metadata": metadata,
+            }
+            for text, metadata in zip(documents, metadatas)
+            if text is not None and metadata is not None
+        ]
