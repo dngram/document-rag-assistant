@@ -27,3 +27,6 @@ htmlcov/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Ignore the smoke test database, which is created and deleted during testing.
+chroma_db_langchain_smoke/
