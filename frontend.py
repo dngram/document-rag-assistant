@@ -1,4 +1,3 @@
-
 import requests
 import streamlit as st
 
@@ -6,6 +5,27 @@ API_BASE_URL = "http://127.0.0.1:8000"
 
 CHUNK_SIZE_OPTIONS = [500, 750, 1000, 1500]
 DEFAULT_CHUNK_SIZE = 1000
+
+IMPLEMENTATIONS = {
+    "Custom RAG": {
+        "key": "custom",
+        "upload_endpoint": "/documents",
+        "ask_endpoint": "/ask",
+        "description": (
+            "Your own ingestion, chunking, hybrid retrieval, "
+            "and answer-generation components."
+        ),
+    },
+    "LangChain RAG": {
+        "key": "langchain",
+        "upload_endpoint": "/langchain/documents",
+        "ask_endpoint": "/langchain/ask",
+        "description": (
+            "LangChain document processing, text splitting, "
+            "vector-store retrieval, and answer generation."
+        ),
+    },
+}
 
 st.set_page_config(
     page_title="DocuMind | RAG Assistant",
@@ -32,12 +52,18 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Initialise session state
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+# Initialise session state.
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = {
+        "custom": [],
+        "langchain": [],
+    }
 
-if "indexed_documents" not in st.session_state:
-    st.session_state.indexed_documents = []
+if "indexed_documents_by_implementation" not in st.session_state:
+    st.session_state.indexed_documents_by_implementation = {
+        "custom": [],
+        "langchain": [],
+    }
 
 
 def check_backend():
@@ -93,6 +119,23 @@ with st.sidebar:
     st.caption("Your documents, searchable with AI")
 
     st.divider()
+    st.subheader("RAG implementation")
+
+    implementation_name = st.selectbox(
+        "Choose implementation",
+        options=list(IMPLEMENTATIONS.keys()),
+        help=(
+            "Each implementation has its own vector store. "
+            "Index documents separately for each one."
+        ),
+    )
+
+    implementation = IMPLEMENTATIONS[implementation_name]
+    implementation_key = implementation["key"]
+
+    st.caption(implementation["description"])
+
+    st.divider()
     st.subheader("Backend status")
 
     backend_available = check_backend()
@@ -121,7 +164,6 @@ with st.sidebar:
     )
 
     overlap = round(chunk_size * 0.15)
-
     st.caption(f"Overlap: {overlap} characters (15%)")
 
     st.divider()
@@ -131,6 +173,7 @@ with st.sidebar:
         "Choose a document",
         type=["txt", "pdf", "docx", "doc"],
         help="Supported formats: TXT, PDF, DOCX and DOC.",
+        key=f"uploader_{implementation_key}",
     )
 
     if st.button(
@@ -140,10 +183,11 @@ with st.sidebar:
     ):
         try:
             with st.spinner(
-                f"Indexing document with {chunk_size}-character chunks..."
+                f"Indexing with {implementation_name} "
+                f"using {chunk_size}-character chunks..."
             ):
                 response = requests.post(
-                    f"{API_BASE_URL}/documents",
+                    f"{API_BASE_URL}{implementation['upload_endpoint']}",
                     files={
                         "file": (
                             uploaded_file.name,
@@ -163,14 +207,19 @@ with st.sidebar:
                 actual_chunk_size = result.get("chunk_size", chunk_size)
                 actual_overlap = result.get("overlap", overlap)
 
-                # Update the displayed entry for this filename.
-                st.session_state.indexed_documents = [
+                indexed_documents = (
+                    st.session_state
+                    .indexed_documents_by_implementation[implementation_key]
+                )
+
+                # Replace the displayed entry for this filename.
+                indexed_documents[:] = [
                     document
-                    for document in st.session_state.indexed_documents
+                    for document in indexed_documents
                     if document["filename"] != filename
                 ]
 
-                st.session_state.indexed_documents.append(
+                indexed_documents.append(
                     {
                         "filename": filename,
                         "chunks": chunks_indexed,
@@ -183,8 +232,9 @@ with st.sidebar:
                     f"Indexed {filename}: {chunks_indexed} chunks."
                 )
                 st.caption(
-                    f"Chunk size: {actual_chunk_size} characters | "
-                    f"Overlap: {actual_overlap} characters"
+                    f"Implementation: {implementation_name} | "
+                    f"Chunk size: {actual_chunk_size} | "
+                    f"Overlap: {actual_overlap}"
                 )
             else:
                 st.error(get_error_message(response))
@@ -196,11 +246,16 @@ with st.sidebar:
         except requests.RequestException as exc:
             st.error(f"Could not reach the API: {exc}")
 
-    if st.session_state.indexed_documents:
-        st.divider()
-        st.subheader("Indexed this session")
+    indexed_documents = (
+        st.session_state
+        .indexed_documents_by_implementation[implementation_key]
+    )
 
-        for document in st.session_state.indexed_documents:
+    if indexed_documents:
+        st.divider()
+        st.subheader("Indexed in this session")
+
+        for document in indexed_documents:
             st.markdown(f"**{document['filename']}**")
             st.caption(
                 f"{document['chunks']} chunks | "
@@ -211,6 +266,8 @@ with st.sidebar:
 
 # Main area
 st.title("Ask your documents")
+st.caption(f"Active implementation: {implementation_name}")
+
 st.write(
     "Upload documents in the sidebar, then ask questions about their contents."
 )
@@ -220,8 +277,10 @@ st.info(
     "Check the source excerpts to verify important details."
 )
 
-# Display conversation history
-for message in st.session_state.messages:
+messages = st.session_state.chat_history[implementation_key]
+
+# Display conversation history for the selected implementation.
+for message in messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
@@ -229,11 +288,13 @@ for message in st.session_state.messages:
             display_citations(message.get("citations", []))
 
 
-# Accept a new question
-question = st.chat_input("Ask a question about your documents...")
+# Accept a new question.
+question = st.chat_input(
+    f"Ask a question using {implementation_name}..."
+)
 
 if question:
-    st.session_state.messages.append(
+    messages.append(
         {"role": "user", "content": question}
     )
 
@@ -243,10 +304,10 @@ if question:
     with st.chat_message("assistant"):
         try:
             with st.spinner(
-                "Searching documents and generating an answer..."
+                f"Searching with {implementation_name} and generating an answer..."
             ):
                 response = requests.post(
-                    f"{API_BASE_URL}/ask",
+                    f"{API_BASE_URL}{implementation['ask_endpoint']}",
                     json={"question": question, "top_k": 3},
                     timeout=300,
                 )
@@ -259,7 +320,7 @@ if question:
                 st.markdown(answer)
                 display_citations(citations)
 
-                st.session_state.messages.append(
+                messages.append(
                     {
                         "role": "assistant",
                         "content": answer,
@@ -270,7 +331,7 @@ if question:
                 error_message = get_error_message(response)
                 st.error(error_message)
 
-                st.session_state.messages.append(
+                messages.append(
                     {
                         "role": "assistant",
                         "content": f"**Request failed:** {error_message}",
@@ -285,7 +346,7 @@ if question:
             )
             st.error(error_message)
 
-            st.session_state.messages.append(
+            messages.append(
                 {
                     "role": "assistant",
                     "content": error_message,
@@ -297,7 +358,7 @@ if question:
             error_message = f"Could not reach the API: {exc}"
             st.error(error_message)
 
-            st.session_state.messages.append(
+            messages.append(
                 {
                     "role": "assistant",
                     "content": error_message,
