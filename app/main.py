@@ -2,7 +2,7 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from app.rag.rag_pipeline import RAGPipeline
@@ -14,7 +14,7 @@ MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
 app = FastAPI(
     title="Document RAG Assistant",
     description="Ask questions about your uploaded documents.",
-    version="1.0.0",
+    version="1.1.0",
 )
 
 _pipeline = None
@@ -55,8 +55,11 @@ def health_check():
 
 
 @app.post("/documents")
-def upload_document(file: UploadFile = File(...)):
-    """Upload a document, extract its text and index its chunks."""
+def upload_document(
+    file: UploadFile = File(...),
+    chunk_size: int = Form(default=1000, ge=1, le=5000),
+):
+    """Upload and index a document using the selected chunk size."""
     filename = Path(file.filename or "").name
     extension = Path(filename).suffix.lower()
 
@@ -86,16 +89,23 @@ def upload_document(file: UploadFile = File(...)):
             path.write_bytes(content)
 
             try:
-                count = get_pipeline().ingest_document(path)
+                count = get_pipeline().ingest_document(
+                    path,
+                    chunk_size=chunk_size,
+                )
             except (ValueError, FileNotFoundError) as exc:
                 raise HTTPException(
                     status_code=400,
                     detail=str(exc),
                 ) from exc
 
+        overlap = round(chunk_size * 0.15)
+
         return {
             "filename": filename,
             "chunks_indexed": count,
+            "chunk_size": chunk_size,
+            "overlap": overlap,
             "message": "Document indexed successfully.",
         }
 
@@ -112,7 +122,10 @@ def ask_question(request: AskRequest):
             top_k=request.top_k,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
 
     return AskResponse(
         answer=result.answer,

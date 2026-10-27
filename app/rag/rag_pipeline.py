@@ -43,17 +43,35 @@ class RAGPipeline:
             model_name=llm_model
         )
 
-    def ingest_document(self, file_path: str | Path) -> int:
-        """Extract, chunk and index a document."""
+
+    def ingest_document(
+        self,
+        file_path: str | Path,
+        chunk_size: int | None = None,
+    ) -> int:
+        """Extract, chunk and index a document using the selected chunk size."""
+        selected_chunk_size = (
+            self.chunk_size if chunk_size is None else chunk_size
+        )
+
+        if selected_chunk_size <= 0:
+            raise ValueError("chunk_size must be greater than zero")
+
+        overlap = round(selected_chunk_size * 0.15)
+
+        if overlap >= selected_chunk_size:
+            raise ValueError("Overlap must be smaller than chunk size")
+
         sections = load_document(file_path)
 
         chunks = chunk_sections(
             sections,
-            chunk_size=self.chunk_size,
-            overlap=self.overlap,
+            chunk_size=selected_chunk_size,
+            overlap=overlap,
         )
 
         return self.vector_store.add_chunks(chunks)
+
 
     def ask(
         self,

@@ -4,6 +4,9 @@ import streamlit as st
 
 API_BASE_URL = "http://127.0.0.1:8000"
 
+CHUNK_SIZE_OPTIONS = [500, 750, 1000, 1500]
+DEFAULT_CHUNK_SIZE = 1000
+
 st.set_page_config(
     page_title="DocuMind | RAG Assistant",
     layout="wide",
@@ -58,7 +61,33 @@ def get_error_message(response):
         return response.text or "An unexpected error occurred."
 
 
-# Sidebar: backend status and document upload
+def display_citations(citations):
+    """Display source information for a generated answer."""
+    if not citations:
+        return
+
+    with st.expander("View source citations"):
+        for citation in citations:
+            source = citation.get("source", "Unknown source")
+            page = citation.get("page_number")
+            chunk_index = citation.get("chunk_index")
+            excerpt = citation.get("excerpt", "")
+
+            st.markdown(f"**{source}**")
+
+            if page is not None:
+                st.caption(f"Page {page}")
+
+            if chunk_index is not None:
+                st.caption(f"Chunk {chunk_index}")
+
+            if excerpt:
+                st.write(excerpt)
+
+            st.divider()
+
+
+# Sidebar
 with st.sidebar:
     st.title("📚 DocuMind")
     st.caption("Your documents, searchable with AI")
@@ -66,13 +95,34 @@ with st.sidebar:
     st.divider()
     st.subheader("Backend status")
 
-    if check_backend():
+    backend_available = check_backend()
+
+    if backend_available:
         st.success("API connected")
     else:
         st.error("API unavailable")
         st.caption(
             "Start FastAPI in another terminal before using the assistant."
         )
+
+    st.divider()
+
+    # Chunking settings
+    st.subheader("Chunking settings")
+
+    chunk_size = st.selectbox(
+        "Chunk size (characters)",
+        options=CHUNK_SIZE_OPTIONS,
+        index=CHUNK_SIZE_OPTIONS.index(DEFAULT_CHUNK_SIZE),
+        help=(
+            "Smaller chunks provide more focused passages. "
+            "Larger chunks retain more surrounding context."
+        ),
+    )
+
+    overlap = round(chunk_size * 0.15)
+
+    st.caption(f"Overlap: {overlap} characters (15%)")
 
     st.divider()
     st.subheader("Upload documents")
@@ -86,10 +136,12 @@ with st.sidebar:
     if st.button(
         "Index document",
         use_container_width=True,
-        disabled=uploaded_file is None,
+        disabled=uploaded_file is None or not backend_available,
     ):
         try:
-            with st.spinner("Extracting text and indexing document..."):
+            with st.spinner(
+                f"Indexing document with {chunk_size}-character chunks..."
+            ):
                 response = requests.post(
                     f"{API_BASE_URL}/documents",
                     files={
@@ -100,35 +152,47 @@ with st.sidebar:
                             or "application/octet-stream",
                         )
                     },
+                    data={"chunk_size": chunk_size},
                     timeout=300,
                 )
 
             if response.ok:
                 result = response.json()
                 filename = result.get("filename", uploaded_file.name)
+                chunks_indexed = result.get("chunks_indexed", 0)
+                actual_chunk_size = result.get("chunk_size", chunk_size)
+                actual_overlap = result.get("overlap", overlap)
 
-                # Avoid duplicate entries in the displayed document list.
+                # Update the displayed entry for this filename.
                 st.session_state.indexed_documents = [
-                    doc
-                    for doc in st.session_state.indexed_documents
-                    if doc["filename"] != filename
+                    document
+                    for document in st.session_state.indexed_documents
+                    if document["filename"] != filename
                 ]
+
                 st.session_state.indexed_documents.append(
                     {
                         "filename": filename,
-                        "chunks": result.get("chunks_indexed", 0),
+                        "chunks": chunks_indexed,
+                        "chunk_size": actual_chunk_size,
+                        "overlap": actual_overlap,
                     }
                 )
 
                 st.success(
-                    f"Indexed {filename} "
-                    f"({result.get('chunks_indexed', 0)} chunks)."
+                    f"Indexed {filename}: {chunks_indexed} chunks."
+                )
+                st.caption(
+                    f"Chunk size: {actual_chunk_size} characters | "
+                    f"Overlap: {actual_overlap} characters"
                 )
             else:
                 st.error(get_error_message(response))
 
         except requests.Timeout:
-            st.error("Indexing took too long. Check the backend and try again.")
+            st.error(
+                "Indexing took too long. Check the backend and try again."
+            )
         except requests.RequestException as exc:
             st.error(f"Could not reach the API: {exc}")
 
@@ -138,10 +202,14 @@ with st.sidebar:
 
         for document in st.session_state.indexed_documents:
             st.markdown(f"**{document['filename']}**")
-            st.caption(f"{document['chunks']} chunks indexed")
+            st.caption(
+                f"{document['chunks']} chunks | "
+                f"Size: {document['chunk_size']} | "
+                f"Overlap: {document['overlap']}"
+            )
 
 
-# Main area: chat interface
+# Main area
 st.title("Ask your documents")
 st.write(
     "Upload documents in the sidebar, then ask questions about their contents."
@@ -152,31 +220,13 @@ st.info(
     "Check the source excerpts to verify important details."
 )
 
-# Display previous conversation
+# Display conversation history
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-        if message["role"] == "assistant" and message.get("citations"):
-            with st.expander("View source citations"):
-                for citation in message["citations"]:
-                    source = citation.get("source", "Unknown source")
-                    page = citation.get("page_number")
-                    chunk_index = citation.get("chunk_index")
-                    excerpt = citation.get("excerpt", "")
-
-                    st.markdown(f"**{source}**")
-
-                    if page is not None:
-                        st.caption(f"Page {page}")
-
-                    if chunk_index is not None:
-                        st.caption(f"Chunk {chunk_index}")
-
-                    if excerpt:
-                        st.write(excerpt)
-
-                    st.divider()
+        if message["role"] == "assistant":
+            display_citations(message.get("citations", []))
 
 
 # Accept a new question
@@ -192,7 +242,9 @@ if question:
 
     with st.chat_message("assistant"):
         try:
-            with st.spinner("Searching documents and generating an answer..."):
+            with st.spinner(
+                "Searching documents and generating an answer..."
+            ):
                 response = requests.post(
                     f"{API_BASE_URL}/ask",
                     json={"question": question, "top_k": 3},
@@ -205,28 +257,7 @@ if question:
                 citations = result.get("citations", [])
 
                 st.markdown(answer)
-
-                if citations:
-                    with st.expander("View source citations"):
-                        for citation in citations:
-                            st.markdown(
-                                f"**{citation.get('source', 'Unknown source')}**"
-                            )
-
-                            if citation.get("page_number") is not None:
-                                st.caption(
-                                    f"Page {citation['page_number']}"
-                                )
-
-                            if citation.get("chunk_index") is not None:
-                                st.caption(
-                                    f"Chunk {citation['chunk_index']}"
-                                )
-
-                            if citation.get("excerpt"):
-                                st.write(citation["excerpt"])
-
-                            st.divider()
+                display_citations(citations)
 
                 st.session_state.messages.append(
                     {
@@ -238,6 +269,7 @@ if question:
             else:
                 error_message = get_error_message(response)
                 st.error(error_message)
+
                 st.session_state.messages.append(
                     {
                         "role": "assistant",
@@ -247,8 +279,12 @@ if question:
                 )
 
         except requests.Timeout:
-            error_message = "The request timed out. Try again or check the backend."
+            error_message = (
+                "The request timed out. "
+                "Try again or check the backend."
+            )
             st.error(error_message)
+
             st.session_state.messages.append(
                 {
                     "role": "assistant",
@@ -256,9 +292,11 @@ if question:
                     "citations": [],
                 }
             )
+
         except requests.RequestException as exc:
             error_message = f"Could not reach the API: {exc}"
             st.error(error_message)
+
             st.session_state.messages.append(
                 {
                     "role": "assistant",
